@@ -1,4 +1,4 @@
-export const DEFAULT_SAMPLE_IFC_NAME = '0401_araike第二調節池排水門v2.4.ifc';
+export const DEFAULT_SAMPLE_IFC_NAME = 'house.ifc';
 
 export function buildSampleIfcUrl(basePath: string, fileName: string): string {
 	const normalizedBase =
