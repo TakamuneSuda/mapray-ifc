@@ -78,7 +78,9 @@ export function resolveWasmUrl(wasmPath: string, baseHref: string): string {
 		return resolved.toString();
 	}
 
-	const directoryUrl = resolved.toString().endsWith('/') ? resolved.toString() : `${resolved.toString()}/`;
+	const directoryUrl = resolved.toString().endsWith('/')
+		? resolved.toString()
+		: `${resolved.toString()}/`;
 	return new URL('web-ifc.wasm', directoryUrl).toString();
 }
 
