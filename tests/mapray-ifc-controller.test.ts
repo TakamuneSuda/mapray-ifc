@@ -225,7 +225,6 @@ function createWorkerSuccessMessage(requestId: number): IfcWorkerSuccessMessage 
 				objectType: null,
 				tag: null,
 				predefinedType: null,
-				propertyGroups: [],
 				bounds: {
 					min: [0, 0, 0],
 					max: [1, 1, 1],

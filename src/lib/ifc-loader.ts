@@ -8,16 +8,6 @@ export interface ExtractedMesh {
 	color: { r: number; g: number; b: number; a: number };
 }
 
-export interface IfcPropertyValue {
-	name: string;
-	value: string;
-}
-
-export interface IfcPropertyGroup {
-	name: string;
-	properties: IfcPropertyValue[];
-}
-
 export interface IfcElementBounds {
 	min: [number, number, number];
 	max: [number, number, number];
@@ -36,7 +26,6 @@ export interface IfcElementMetadata {
 	objectType: string | null;
 	tag: string | null;
 	predefinedType: string | null;
-	propertyGroups: IfcPropertyGroup[];
 	bounds: IfcElementBounds | null;
 }
 
@@ -145,276 +134,20 @@ function applyTransformNormal(
 	return [tx / length, ty / length, tz / length];
 }
 
-function unwrapIfcValue(value: unknown): unknown {
-	if (value === null || value === undefined) {
-		return null;
-	}
-
-	if (Array.isArray(value)) {
-		return value.map((entry) => unwrapIfcValue(entry));
-	}
-
-	if (typeof value !== 'object') {
-		return value;
-	}
-
-	if ('value' in value) {
-		return unwrapIfcValue((value as { value: unknown }).value);
-	}
-
-	const entries = Object.entries(value as Record<string, unknown>);
-
-	if (entries.length === 1 && entries[0]?.[0] === 'expressID') {
-		return entries[0][1];
-	}
-
-	const nextValue: Record<string, unknown> = {};
-
-	for (const [key, entry] of entries) {
-		if (key === 'type') {
-			continue;
-		}
-
-		nextValue[key] = unwrapIfcValue(entry);
-	}
-
-	return nextValue;
-}
-
-function toDisplayValue(value: unknown): string {
-	const normalized = unwrapIfcValue(value);
-
-	if (normalized === null || normalized === undefined || normalized === '') {
-		return '-';
-	}
-
-	if (
-		typeof normalized === 'string' ||
-		typeof normalized === 'number' ||
-		typeof normalized === 'boolean'
-	) {
-		return String(normalized);
-	}
-
-	return JSON.stringify(normalized);
-}
-
 function toOptionalDisplayValue(value: unknown): string | null {
-	const normalized = unwrapIfcValue(value);
-
-	if (normalized === null || normalized === undefined || normalized === '') {
+	if (value === null || value === undefined || value === '') {
 		return null;
 	}
 
-	if (
-		typeof normalized === 'string' ||
-		typeof normalized === 'number' ||
-		typeof normalized === 'boolean'
-	) {
-		return String(normalized);
+	if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+		return String(value);
 	}
 
-	return JSON.stringify(normalized);
-}
-
-function toArray<T>(value: T | T[] | null | undefined): T[] {
-	if (value === null || value === undefined) {
-		return [];
+	if (typeof value === 'object' && 'value' in value) {
+		return toOptionalDisplayValue((value as { value: unknown }).value);
 	}
 
-	return Array.isArray(value) ? value : [value];
-}
-
-function getExpressID(value: unknown): number | null {
-	if (typeof value === 'number' && Number.isFinite(value)) {
-		return value;
-	}
-
-	if (
-		value &&
-		typeof value === 'object' &&
-		'value' in value &&
-		typeof (value as { value?: unknown }).value === 'number'
-	) {
-		return (value as { value: number }).value;
-	}
-
-	if (
-		value &&
-		typeof value === 'object' &&
-		'expressID' in value &&
-		typeof (value as { expressID?: unknown }).expressID === 'number'
-	) {
-		return (value as { expressID: number }).expressID;
-	}
-
-	return null;
-}
-
-function getExpressIDs(value: unknown): number[] {
-	return toArray(value)
-		.map((entry) => getExpressID(entry))
-		.filter((entry): entry is number => entry !== null);
-}
-
-function collectPropertyValues(property: Record<string, unknown>): IfcPropertyValue[] {
-	const name =
-		toOptionalDisplayValue(property.Name) ?? `Property #${property.expressID ?? 'unknown'}`;
-	const skipKeys = new Set([
-		'expressID',
-		'type',
-		'Name',
-		'Description',
-		'GlobalId',
-		'OwnerHistory',
-		'HasExternalReferences',
-		'PartOfComplex',
-		'Unit'
-	]);
-	const properties: IfcPropertyValue[] = [];
-
-	for (const [key, rawValue] of Object.entries(property)) {
-		if (skipKeys.has(key)) {
-			continue;
-		}
-
-		if (rawValue === null || rawValue === undefined || rawValue === '') {
-			continue;
-		}
-
-		properties.push({
-			name: key === 'NominalValue' ? name : `${name}.${key}`,
-			value: toDisplayValue(rawValue)
-		});
-	}
-
-	if (properties.length === 0) {
-		properties.push({
-			name,
-			value: '-'
-		});
-	}
-
-	return properties;
-}
-
-function toPropertyGroup(group: Record<string, unknown>): IfcPropertyGroup | null {
-	const groupName =
-		toOptionalDisplayValue(group.Name) ?? `PropertySet #${group.expressID ?? 'unknown'}`;
-	const rawProperties = [
-		...(Array.isArray(group.HasProperties) ? group.HasProperties : []),
-		...(Array.isArray(group.Quantities) ? group.Quantities : [])
-	] as Record<string, unknown>[];
-	const properties = rawProperties.flatMap((property) => collectPropertyValues(property));
-
-	if (properties.length === 0) {
-		return null;
-	}
-
-	return {
-		name: groupName,
-		properties
-	};
-}
-
-function mergePropertyGroups(groups: Record<string, unknown>[]): IfcPropertyGroup[] {
-	return groups
-		.map((group) => toPropertyGroup(group))
-		.filter((group): group is IfcPropertyGroup => group !== null);
-}
-
-function getLineRecord(
-	api: IfcAPI,
-	modelID: number,
-	expressID: number,
-	recursive = false,
-	inverse = false,
-	inversePropKey?: string
-): Record<string, unknown> {
-	return api.GetLine(modelID, expressID, recursive, inverse, inversePropKey ?? null) as Record<
-		string,
-		unknown
-	>;
-}
-
-function getInverseRelationIds(
-	api: IfcAPI,
-	modelID: number,
-	expressID: number,
-	inverseKey: string
-): number[] {
-	const item = getLineRecord(api, modelID, expressID, false, true, inverseKey);
-	return getExpressIDs(item[inverseKey]);
-}
-
-function getRelatedDefinitionIds(
-	api: IfcAPI,
-	modelID: number,
-	relationIds: number[],
-	relatingKey: string
-): number[] {
-	const relatedIds = new Set<number>();
-
-	for (const relationId of relationIds) {
-		const relation = getLineRecord(api, modelID, relationId, false, false);
-
-		for (const definitionId of getExpressIDs(relation[relatingKey])) {
-			relatedIds.add(definitionId);
-		}
-	}
-
-	return Array.from(relatedIds);
-}
-
-function getPropertySetDefinitionsFromTypeObject(
-	api: IfcAPI,
-	modelID: number,
-	typeObjectId: number
-): number[] {
-	const typeObject = getLineRecord(api, modelID, typeObjectId, false, false);
-	return getExpressIDs(typeObject.HasPropertySets);
-}
-
-function getDirectPropertySetIds(api: IfcAPI, modelID: number, expressID: number): number[] {
-	const relationIds = getInverseRelationIds(api, modelID, expressID, 'IsDefinedBy');
-	return getRelatedDefinitionIds(api, modelID, relationIds, 'RelatingPropertyDefinition');
-}
-
-function getTypeObjectIds(api: IfcAPI, modelID: number, expressID: number): number[] {
-	const schema = api.GetModelSchema(modelID);
-
-	if (schema === 'IFC2X3') {
-		const relationIds = getInverseRelationIds(api, modelID, expressID, 'IsDefinedBy');
-		return getRelatedDefinitionIds(api, modelID, relationIds, 'RelatingType');
-	}
-
-	const relationIds = getInverseRelationIds(api, modelID, expressID, 'IsTypedBy');
-	return getRelatedDefinitionIds(api, modelID, relationIds, 'RelatingType');
-}
-
-async function extractPropertyGroups(
-	api: IfcAPI,
-	modelID: number,
-	expressID: number
-): Promise<IfcPropertyGroup[]> {
-	const propertySetIds = new Set<number>(getDirectPropertySetIds(api, modelID, expressID));
-	const typeObjectIds = getTypeObjectIds(api, modelID, expressID);
-
-	for (const typeObjectId of typeObjectIds) {
-		for (const propertySetId of getPropertySetDefinitionsFromTypeObject(
-			api,
-			modelID,
-			typeObjectId
-		)) {
-			propertySetIds.add(propertySetId);
-		}
-	}
-
-	const propertyGroups = Array.from(propertySetIds).map((propertySetId) =>
-		getLineRecord(api, modelID, propertySetId, true, false)
-	);
-
-	return mergePropertyGroups(propertyGroups);
+	return JSON.stringify(value);
 }
 
 async function extractElementMetadata(
@@ -436,7 +169,6 @@ async function extractElementMetadata(
 		objectType: toOptionalDisplayValue(item.ObjectType),
 		tag: toOptionalDisplayValue(item.Tag),
 		predefinedType: toOptionalDisplayValue(item.PredefinedType),
-		propertyGroups: await extractPropertyGroups(api, modelID, expressID),
 		bounds
 	};
 }

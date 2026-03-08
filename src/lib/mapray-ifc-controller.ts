@@ -1,14 +1,21 @@
 import type { ScenePackage } from './gltf-builder';
+import type { IfcElementMetadata, ExtractedModelStats } from './ifc-loader';
+import type { IfcProcessingMetrics } from './ifc-worker-types';
+import { resolvePickedElement } from './ifc-pick';
 import {
-	type IfcElementBounds,
-	type IfcElementMetadata,
-	type ExtractedModelStats
-} from './ifc-loader';
-import type {
-	IfcProcessingMetrics,
-	IfcWorkerResponse,
-	IfcWorkerSuccessMessage
-} from './ifc-worker-types';
+	createSceneAsset,
+	getBinaryResourceBytes,
+	removeEntities,
+	startSceneLoad,
+	type SceneAsset
+} from './ifc-scene';
+import {
+	applyTransformToEntities,
+	getCurrentOriginGocs,
+	getTransformFromGocsPosition,
+	toModelLocalPosition
+} from './ifc-transform';
+import { createIfcWorkerClient, type IfcWorkerClient } from './ifc-worker-client';
 import { createMemoryResource } from './memory-resource';
 
 type MaprayModule = typeof import('@mapray/mapray-js').default;
@@ -19,8 +26,6 @@ type Vector3 = [number, number, number];
 
 const DEFAULT_MODEL_OFFSET_TILT = -90;
 const DEFAULT_BOUNDS_EPSILON = 0.05;
-
-type SceneAsset = ScenePackage & { revoke(): void };
 
 export interface IfcModelTransform {
 	longitude: number;
@@ -66,79 +71,14 @@ export interface MaprayIfcPickResult {
 	elapsedMs: number;
 }
 
-function createSceneAsset(scenePackage: ScenePackage): SceneAsset {
-	return {
-		...scenePackage,
-		revoke() {}
-	};
-}
-
-function getBinaryResourceBytes(scenePackage: ScenePackage): number {
-	return Object.values(scenePackage.resources).reduce((total, resource) => {
-		return total + (resource.binary?.byteLength ?? 0);
-	}, 0);
-}
-
-function isPointInsideBounds(point: Vector3, bounds: IfcElementBounds, epsilon: number): boolean {
-	return (
-		point[0] >= bounds.min[0] - epsilon &&
-		point[0] <= bounds.max[0] + epsilon &&
-		point[1] >= bounds.min[1] - epsilon &&
-		point[1] <= bounds.max[1] + epsilon &&
-		point[2] >= bounds.min[2] - epsilon &&
-		point[2] <= bounds.max[2] + epsilon
-	);
-}
-
-function getBoundsDistanceSquared(point: Vector3, bounds: IfcElementBounds): number {
-	const dx =
-		point[0] < bounds.min[0]
-			? bounds.min[0] - point[0]
-			: point[0] > bounds.max[0]
-				? point[0] - bounds.max[0]
-				: 0;
-	const dy =
-		point[1] < bounds.min[1]
-			? bounds.min[1] - point[1]
-			: point[1] > bounds.max[1]
-				? point[1] - bounds.max[1]
-				: 0;
-	const dz =
-		point[2] < bounds.min[2]
-			? bounds.min[2] - point[2]
-			: point[2] > bounds.max[2]
-				? point[2] - bounds.max[2]
-				: 0;
-
-	return dx * dx + dy * dy + dz * dz;
-}
-
-function getCenterDistanceSquared(point: Vector3, bounds: IfcElementBounds): number {
-	const dx = point[0] - bounds.center[0];
-	const dy = point[1] - bounds.center[1];
-	const dz = point[2] - bounds.center[2];
-
-	return dx * dx + dy * dy + dz * dz;
-}
-
-type PendingRequest = {
-	requestId: number;
-	resolve: (message: IfcWorkerSuccessMessage) => void;
-	reject: (error: Error) => void;
-};
-
 export class MaprayIfcController {
 	readonly #mapray: MaprayModule;
 	readonly #viewer: MaprayViewerInstance;
-	readonly #workerFactory: () => Worker;
-	readonly #onProgress?: (message: string) => void;
+	readonly #workerClient: IfcWorkerClient;
 	readonly #modelOffsetTilt: number;
 	readonly #boundsEpsilon: number;
 	readonly #wasmPath?: string;
 
-	#ifcWorker: Worker | null = null;
-	#nextRequestId = 1;
-	#pendingRequest: PendingRequest | null = null;
 	#sceneLoader: SceneLoaderInstance | null = null;
 	#sceneAsset: SceneAsset | null = null;
 	#loadedEntities: MaprayModelEntityInstance[] = [];
@@ -161,13 +101,15 @@ export class MaprayIfcController {
 	constructor(options: MaprayIfcControllerOptions) {
 		this.#mapray = options.mapray;
 		this.#viewer = options.viewer;
-		this.#workerFactory =
-			options.workerFactory ??
-			(() =>
-				new Worker(new URL('./ifc-worker.js', import.meta.url), {
-					type: 'module'
-				}));
-		this.#onProgress = options.onProgress;
+		this.#workerClient = createIfcWorkerClient({
+			workerFactory:
+				options.workerFactory ??
+				(() =>
+					new Worker(new URL('./ifc-worker.js', import.meta.url), {
+						type: 'module'
+					})),
+			onProgress: options.onProgress
+		});
 		this.#modelOffsetTilt = options.modelOffsetTilt ?? DEFAULT_MODEL_OFFSET_TILT;
 		this.#boundsEpsilon = options.boundsEpsilon ?? DEFAULT_BOUNDS_EPSILON;
 		this.#wasmPath = options.wasmPath;
@@ -198,22 +140,11 @@ export class MaprayIfcController {
 	}
 
 	getCurrentOriginGocs(): Vector3 | null {
-		const origin = new this.#mapray.GeoPoint(
-			this.#transform.longitude,
-			this.#transform.latitude,
-			this.#transform.height
-		).getAsGocs(this.#mapray.GeoMath.createVector3());
-
-		return [origin[0], origin[1], origin[2]];
+		return getCurrentOriginGocs(this.#mapray, this.#transform);
 	}
 
 	moveToGocsPosition(position: Vector3): void {
-		const geoPoint = new this.#mapray.GeoPoint().setFromGocs(position);
-		this.setTransform({
-			longitude: geoPoint.longitude,
-			latitude: geoPoint.latitude,
-			height: geoPoint.altitude
-		});
+		this.setTransform(getTransformFromGocsPosition(this.#mapray, position));
 	}
 
 	pickModelEntity(screenPosition: [number, number]): MaprayModelEntityInstance | null {
@@ -246,14 +177,14 @@ export class MaprayIfcController {
 		}
 
 		const candidates = this.#chunkMetadata.get(pickResult.entity) ?? [];
-		const localPoint = this.#toModelLocalPosition([
+		const localPoint = toModelLocalPosition(this.#mapray, this.#transform, this.#modelOffsetTilt, [
 			pickResult.position[0],
 			pickResult.position[1],
 			pickResult.position[2]
 		]);
 
 		return {
-			element: localPoint ? this.#resolvePickedElement(candidates, localPoint) : null,
+			element: resolvePickedElement(candidates, localPoint, this.#boundsEpsilon),
 			entity: pickResult.entity,
 			worldPosition: [pickResult.position[0], pickResult.position[1], pickResult.position[2]],
 			elapsedMs
@@ -272,72 +203,35 @@ export class MaprayIfcController {
 		this.#isLoading = true;
 		const totalLoadStartedAt = performance.now();
 		let nextSceneAsset: SceneAsset | null = null;
-		const nextLoadedEntities: MaprayModelEntityInstance[] = [];
+		let nextLoadedEntities: MaprayModelEntityInstance[] = [];
 		let nextChunkMetadata = new Map<MaprayModelEntityInstance, IfcElementMetadata[]>();
 
 		try {
 			const { data, fileSizeBytes } = await this.#toArrayBuffer(source, options.fileSizeBytes);
-			const workerResult = await this.#processIfcInWorker(data, this.#wasmPath);
+			const workerResult = await this.#workerClient.process(data, this.#wasmPath);
 			this.#assertActiveLoad(loadId);
 
 			nextSceneAsset = createSceneAsset(workerResult.scenePackage);
-			nextChunkMetadata = new Map<MaprayModelEntityInstance, IfcElementMetadata[]>();
-			const metadataByExpressId = new Map(
-				workerResult.elements.map((element) => [element.expressID, element] as const)
-			);
-			const chunkByEntityId = new Map(
-				workerResult.chunks.map((chunk) => [chunk.entityId, chunk] as const)
-			);
-
 			this.#clearLoadedScene();
 			this.#sceneAsset = nextSceneAsset;
-			this.#loadingEntities = nextLoadedEntities;
 
 			const maprayLoadStartedAt = performance.now();
-			this.#sceneLoader = new this.#mapray.SceneLoader(
-				this.#viewer.scene,
-				createMemoryResource(this.#mapray, this.#sceneAsset),
-				{
-					onEntity: (loader, entity, item) => {
-						loader.scene.addEntity(entity);
-
-						if (!(entity instanceof this.#mapray.ModelEntity)) {
-							return;
-						}
-
-						const entityId =
-							typeof item === 'object' &&
-							item !== null &&
-							'id' in item &&
-							typeof (item as { id?: unknown }).id === 'string'
-								? (item as { id: string }).id
-								: null;
-
-						if (!entityId) {
-							return;
-						}
-
-						const chunk = chunkByEntityId.get(entityId);
-
-						if (!chunk) {
-							return;
-						}
-
-						nextLoadedEntities.push(entity);
-						nextChunkMetadata.set(
-							entity,
-							chunk.elementExpressIds
-								.map((expressID) => metadataByExpressId.get(expressID))
-								.filter((element): element is IfcElementMetadata => element !== undefined)
-						);
-					}
-				}
-			);
+			const sceneLoad = startSceneLoad({
+				mapray: this.#mapray,
+				viewer: this.#viewer,
+				sceneAsset: this.#sceneAsset,
+				elements: workerResult.elements,
+				chunks: workerResult.chunks
+			});
+			nextLoadedEntities = sceneLoad.loadedEntities;
+			nextChunkMetadata = sceneLoad.chunkMetadata;
+			this.#sceneLoader = sceneLoad.sceneLoader;
+			this.#loadingEntities = sceneLoad.loadedEntities;
 			await this.#sceneLoader.load();
 			this.#assertActiveLoad(loadId);
 			const maprayLoadMs = performance.now() - maprayLoadStartedAt;
 
-			if (nextLoadedEntities.length === 0) {
+			if (sceneLoad.loadedEntities.length === 0) {
 				throw new Error('Mapray model entities could not be created.');
 			}
 
@@ -362,7 +256,7 @@ export class MaprayIfcController {
 				fileSizeBytes
 			};
 		} catch (error) {
-			this.#removeEntities(nextLoadedEntities);
+			removeEntities(this.#viewer, nextLoadedEntities);
 			this.#loadingEntities = [];
 			this.#sceneLoader = null;
 
@@ -387,8 +281,7 @@ export class MaprayIfcController {
 	destroy(): void {
 		this.#cancelInFlightLoad();
 		this.#clearLoadedScene();
-		this.#ifcWorker?.terminate();
-		this.#ifcWorker = null;
+		this.#workerClient.destroy();
 	}
 
 	async #toArrayBuffer(
@@ -408,80 +301,6 @@ export class MaprayIfcController {
 		};
 	}
 
-	#ensureIfcWorker(): Worker {
-		if (!this.#ifcWorker) {
-			this.#ifcWorker = this.#workerFactory();
-			this.#ifcWorker.addEventListener('message', this.#handleWorkerMessage);
-			this.#ifcWorker.addEventListener('error', (event) => {
-				this.#resetIfcWorker();
-
-				if (!this.#pendingRequest) {
-					return;
-				}
-
-				const { reject } = this.#pendingRequest;
-				this.#pendingRequest = null;
-				const location =
-					event.filename && event.lineno
-						? ` (${event.filename}:${event.lineno}${event.colno ? `:${event.colno}` : ''})`
-						: '';
-				reject(new Error(`${event.message || 'IFC worker failed.'}${location}`));
-			});
-		}
-
-		return this.#ifcWorker;
-	}
-
-	#handleWorkerMessage = (event: MessageEvent<IfcWorkerResponse>): void => {
-		const message = event.data;
-
-		if (!this.#pendingRequest || message.requestId !== this.#pendingRequest.requestId) {
-			return;
-		}
-
-		if (message.type === 'progress') {
-			this.#onProgress?.(message.message);
-			return;
-		}
-
-		if (message.type === 'error') {
-			const { reject } = this.#pendingRequest;
-			this.#pendingRequest = null;
-			reject(new Error(message.error));
-			return;
-		}
-
-		const { resolve } = this.#pendingRequest;
-		this.#pendingRequest = null;
-		resolve(message);
-	};
-
-	async #processIfcInWorker(
-		data: ArrayBuffer,
-		wasmPath?: string
-	): Promise<IfcWorkerSuccessMessage> {
-		if (this.#pendingRequest) {
-			throw new Error('Another IFC file is already being processed.');
-		}
-
-		const worker = this.#ensureIfcWorker();
-		const requestId = this.#nextRequestId;
-		this.#nextRequestId += 1;
-
-		return await new Promise<IfcWorkerSuccessMessage>((resolve, reject) => {
-			this.#pendingRequest = { requestId, resolve, reject };
-			worker.postMessage(
-				{
-					type: 'load-ifc',
-					requestId,
-					data,
-					wasmPath
-				},
-				[data]
-			);
-		});
-	}
-
 	#assertActiveLoad(loadId: number): void {
 		if (loadId !== this.#activeLoadId) {
 			throw new Error('IFC loading was canceled.');
@@ -489,33 +308,23 @@ export class MaprayIfcController {
 	}
 
 	#cancelInFlightLoad(): void {
-		if (!this.#isLoading && !this.#pendingRequest && this.#loadingEntities.length === 0) {
+		if (!this.#isLoading && this.#loadingEntities.length === 0) {
 			return;
 		}
 
 		this.#activeLoadId += 1;
 		this.#isLoading = false;
 
-		if (this.#pendingRequest) {
-			const { reject } = this.#pendingRequest;
-			this.#pendingRequest = null;
-			reject(new Error('IFC loading was canceled.'));
-			this.#resetIfcWorker();
-		}
+		this.#workerClient.cancel();
 
 		this.#sceneLoader?.cancel();
 		this.#sceneLoader = null;
-		this.#removeEntities(this.#loadingEntities);
+		removeEntities(this.#viewer, this.#loadingEntities);
 		this.#loadingEntities = [];
 	}
 
-	#resetIfcWorker(): void {
-		this.#ifcWorker?.terminate();
-		this.#ifcWorker = null;
-	}
-
 	#clearLoadedScene(): void {
-		this.#removeEntities(this.#loadedEntities);
+		removeEntities(this.#viewer, this.#loadedEntities);
 		this.#loadedEntities = [];
 		this.#chunkMetadata = new Map<MaprayModelEntityInstance, IfcElementMetadata[]>();
 		this.#elements = [];
@@ -524,118 +333,7 @@ export class MaprayIfcController {
 		this.#sceneAsset = null;
 	}
 
-	#removeEntities(entities: MaprayModelEntityInstance[]): void {
-		for (const entity of entities) {
-			this.#viewer.scene.removeEntity(entity);
-		}
-	}
-
 	#applyTransform(): void {
-		if (this.#loadedEntities.length === 0) {
-			return;
-		}
-
-		const position = new this.#mapray.GeoPoint(
-			this.#transform.longitude,
-			this.#transform.latitude,
-			this.#transform.height
-		);
-		const orientation = new this.#mapray.Orientation(
-			this.#transform.heading,
-			this.#transform.tilt,
-			this.#transform.roll
-		);
-
-		for (const entity of this.#loadedEntities) {
-			entity.setPosition(position);
-			entity.setOrientation(orientation);
-			entity.setScale([this.#transform.scale, this.#transform.scale, this.#transform.scale]);
-			entity.altitude_mode = this.#mapray.AltitudeMode.ABSOLUTE;
-		}
-	}
-
-	#getModelToGocsMatrix() {
-		const geoMath = this.#mapray.GeoMath;
-		const mlocsToGocs = new this.#mapray.GeoPoint(
-			this.#transform.longitude,
-			this.#transform.latitude,
-			this.#transform.height
-		).getMlocsToGocsMatrix(geoMath.createMatrix());
-		const entityToMlocs = new this.#mapray.Orientation(
-			this.#transform.heading,
-			this.#transform.tilt,
-			this.#transform.roll
-		).getTransformMatrix(
-			[this.#transform.scale, this.#transform.scale, this.#transform.scale],
-			geoMath.createMatrix()
-		);
-		const offsetToEntity = new this.#mapray.Orientation(
-			0,
-			this.#modelOffsetTilt,
-			0
-		).getTransformMatrix([1, 1, 1], geoMath.createMatrix());
-		const modelToMlocs = geoMath.mul_AA(entityToMlocs, offsetToEntity, geoMath.createMatrix());
-
-		return geoMath.mul_AA(mlocsToGocs, modelToMlocs, geoMath.createMatrix());
-	}
-
-	#toModelLocalPosition(position: Vector3): Vector3 | null {
-		const geoMath = this.#mapray.GeoMath;
-		const modelToGocs = this.#getModelToGocsMatrix();
-		const gocsToModel = geoMath.inverse_A(modelToGocs, geoMath.createMatrix());
-		const localPosition = geoMath.transformPosition_A(
-			gocsToModel,
-			position,
-			geoMath.createVector3()
-		);
-
-		return [localPosition[0], localPosition[1], localPosition[2]];
-	}
-
-	#resolvePickedElement(
-		candidates: IfcElementMetadata[],
-		localPoint: Vector3
-	): IfcElementMetadata | null {
-		const withBounds = candidates.filter(
-			(element): element is IfcElementMetadata & { bounds: IfcElementBounds } =>
-				element.bounds !== null
-		);
-
-		if (withBounds.length === 0) {
-			return null;
-		}
-
-		const containing = withBounds.filter((element) =>
-			isPointInsideBounds(localPoint, element.bounds, this.#boundsEpsilon)
-		);
-
-		if (containing.length > 0) {
-			containing.sort((a, b) => {
-				if (a.bounds.volume !== b.bounds.volume) {
-					return a.bounds.volume - b.bounds.volume;
-				}
-
-				return (
-					getCenterDistanceSquared(localPoint, a.bounds) -
-					getCenterDistanceSquared(localPoint, b.bounds)
-				);
-			});
-
-			return containing[0];
-		}
-
-		let nearest: (IfcElementMetadata & { bounds: IfcElementBounds }) | null = null;
-		let nearestDistance = Number.POSITIVE_INFINITY;
-
-		for (const element of withBounds) {
-			const distance = getBoundsDistanceSquared(localPoint, element.bounds);
-
-			if (distance < nearestDistance) {
-				nearest = element;
-				nearestDistance = distance;
-			}
-		}
-
-		return nearest;
+		applyTransformToEntities(this.#mapray, this.#loadedEntities, this.#transform);
 	}
 }

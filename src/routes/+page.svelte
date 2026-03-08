@@ -435,26 +435,6 @@
 						</div>
 					</div>
 
-					<div class="space-y-3">
-						<h3 class="text-sm font-semibold text-slate-200">Property Sets</h3>
-
-						{#if selectedElement.propertyGroups.length === 0}
-							<p class="text-sm text-slate-400">Property Set は見つかりませんでした。</p>
-						{:else}
-							{#each selectedElement.propertyGroups as group, groupIndex (`${group.name}-${groupIndex}`)}
-								<section class="rounded-xl border border-white/10 bg-black/20 p-3">
-									<h4 class="mb-3 text-sm font-medium text-cyan-200">{group.name}</h4>
-
-									<div class="grid grid-cols-[10rem_1fr] gap-x-3 gap-y-2 text-xs">
-										{#each group.properties as property, propertyIndex (`${property.name}-${propertyIndex}`)}
-											<p class="break-words text-slate-400">{property.name}</p>
-											<p class="break-words text-slate-100">{property.value}</p>
-										{/each}
-									</div>
-								</section>
-							{/each}
-						{/if}
-					</div>
 				</div>
 			{/if}
 		</div>
