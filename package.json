@@ -1,6 +1,6 @@
 {
 	"name": "mapray-ifc",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "IFC loader/controller for Mapray viewers powered by web-ifc",
 	"license": "MIT",
 	"type": "module",

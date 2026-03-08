@@ -56,9 +56,9 @@ export interface ExtractedModel {
 }
 
 let ifcApi: IfcAPI | null = null;
-let ifcApiWasmPath: string | null = null;
+let ifcApiWasmUrl: string | null = null;
 
-const DEFAULT_WASM_PATH = new URL('./', new URL(webIfcWasmUrl, import.meta.url)).toString();
+const DEFAULT_WASM_URL = new URL(webIfcWasmUrl, import.meta.url).toString();
 
 function safeDelete(value: unknown): void {
 	if (
@@ -71,34 +71,34 @@ function safeDelete(value: unknown): void {
 	}
 }
 
-function normalizeWasmPath(wasmPath: string): string {
-	const resolved = new URL(wasmPath, self.location.href);
+export function resolveWasmUrl(wasmPath: string, baseHref: string): string {
+	const resolved = new URL(wasmPath, baseHref);
 
 	if (resolved.pathname.endsWith('.wasm')) {
-		return new URL('./', resolved).toString();
+		return resolved.toString();
 	}
 
-	return resolved.toString().endsWith('/') ? resolved.toString() : `${resolved.toString()}/`;
+	const directoryUrl = resolved.toString().endsWith('/') ? resolved.toString() : `${resolved.toString()}/`;
+	return new URL('web-ifc.wasm', directoryUrl).toString();
 }
 
-async function getIfcApi(wasmPath = DEFAULT_WASM_PATH): Promise<IfcAPI> {
-	const resolvedWasmPath = normalizeWasmPath(wasmPath);
+async function getIfcApi(wasmPath = DEFAULT_WASM_URL): Promise<IfcAPI> {
+	const resolvedWasmUrl = resolveWasmUrl(wasmPath, self.location.href);
 
-	if (ifcApi && ifcApiWasmPath === resolvedWasmPath) {
+	if (ifcApi && ifcApiWasmUrl === resolvedWasmUrl) {
 		return ifcApi;
 	}
 
 	if (ifcApi) {
 		ifcApi.Dispose();
 		ifcApi = null;
-		ifcApiWasmPath = null;
+		ifcApiWasmUrl = null;
 	}
 
 	const api = new IfcAPI();
-	api.SetWasmPath(resolvedWasmPath, true);
-	await api.Init(undefined, true);
+	await api.Init(() => resolvedWasmUrl, true);
 	ifcApi = api;
-	ifcApiWasmPath = resolvedWasmPath;
+	ifcApiWasmUrl = resolvedWasmUrl;
 
 	return api;
 }

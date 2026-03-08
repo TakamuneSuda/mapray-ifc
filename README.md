@@ -13,7 +13,7 @@
 
 ## デモ
 
-- デモ URL: `https://takamunesuda.github.io/mapray-ifc/`
+- デモ URL: [https://takamunesuda.github.io/mapray-ifc/](https://takamunesuda.github.io/mapray-ifc/)
 
 ## 位置づけ
 
