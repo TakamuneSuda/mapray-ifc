@@ -35,7 +35,7 @@
 	"types": "./dist/index.d.ts",
 	"scripts": {
 		"dev": "vite dev",
-		"build": "vite build",
+		"build": "rm -rf build && vite build",
 		"build:lib": "svelte-package --input src/lib --output dist",
 		"check:package": "pnpm build:lib && publint",
 		"prepublishOnly": "pnpm test && pnpm check && pnpm lint && pnpm check:package",

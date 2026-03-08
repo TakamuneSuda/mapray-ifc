@@ -11,6 +11,10 @@
 このリポジトリには sample UI も含まれていますが、ライブラリ本体は `src/lib` 配下です。  
 `src/routes` 配下は動作確認用のサンプルであり、公開 API には含めません。
 
+## デモ
+
+- デモ URL: `https://takamunesuda.github.io/mapray-ifc/`
+
 ## 位置づけ
 
 - ライブラリ本体: `src/lib`
