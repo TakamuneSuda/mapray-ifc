@@ -1,10 +1,26 @@
 {
 	"name": "mapray-ifc",
-	"private": true,
 	"version": "0.0.1",
 	"description": "IFC loader/controller for Mapray viewers powered by web-ifc",
 	"license": "UNLICENSED",
 	"type": "module",
+	"main": "./dist/index.js",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/TakamuneSuda/mapray-ifc.git"
+	},
+	"homepage": "https://github.com/TakamuneSuda/mapray-ifc#readme",
+	"bugs": {
+		"url": "https://github.com/TakamuneSuda/mapray-ifc/issues"
+	},
+	"keywords": [
+		"ifc",
+		"mapray",
+		"web-ifc",
+		"3d",
+		"gis"
+	],
+	"sideEffects": false,
 	"files": [
 		"dist",
 		"README.md"
@@ -22,6 +38,7 @@
 		"build": "vite build",
 		"build:lib": "svelte-package --input src/lib --output dist",
 		"check:package": "pnpm build:lib && publint",
+		"prepublishOnly": "pnpm test && pnpm check && pnpm lint && pnpm check:package",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
@@ -34,6 +51,8 @@
 	"devDependencies": {
 		"@eslint/compat": "^2.0.2",
 		"@eslint/js": "^9.39.2",
+		"@mapray/mapray-js": "^0.9.6",
+		"@mapray/ui": "^0.9.6",
 		"@sveltejs/adapter-cloudflare": "^7.2.8",
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.50.2",
@@ -58,10 +77,11 @@
 		"vite-plugin-static-copy": "^3.2.0",
 		"vitest": "^4.0.18"
 	},
+	"peerDependencies": {
+		"@mapray/mapray-js": "^0.9.6"
+	},
 	"dependencies": {
 		"@gltf-transform/core": "^4.3.0",
-		"@mapray/mapray-js": "^0.9.6",
-		"@mapray/ui": "^0.9.6",
 		"web-ifc": "^0.0.77"
 	}
 }

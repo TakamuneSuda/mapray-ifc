@@ -30,6 +30,7 @@
 
 このライブラリは次の前提で作っています。
 
+- 利用側アプリで `@mapray/mapray-js` を利用していること
 - `module worker` を使えること
 - `web-ifc.wasm` を読み込めること
 - `new URL(..., import.meta.url)` や `?url` import を扱える bundler であること
@@ -39,6 +40,9 @@ Webpack、Next.js、独自 bundler などは未検証です。
 
 また、IFC の解析は常に Worker で行います。  
 main thread fallback は提供していません。
+
+`@mapray/mapray-js` は peer dependency として扱っています。  
+このパッケージ単体では Viewer を生成せず、利用側が持つ `mapray.Viewer` に後付けで接続します。
 
 ## エントリポイント
 
@@ -271,10 +275,7 @@ controller.setTransform({
 
 ```ts
 const rect = canvas.getBoundingClientRect();
-const hit = controller.pick([
-	event.clientX - rect.left,
-	event.clientY - rect.top
-]);
+const hit = controller.pick([event.clientX - rect.left, event.clientY - rect.top]);
 
 if (hit.element) {
 	console.log(hit.element.name);

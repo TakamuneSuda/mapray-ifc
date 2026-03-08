@@ -13,10 +13,7 @@ type IfcTransformLike = {
 	scale: number;
 };
 
-export function getCurrentOriginGocs(
-	mapray: MaprayModule,
-	transform: IfcTransformLike
-): Vector3 {
+export function getCurrentOriginGocs(mapray: MaprayModule, transform: IfcTransformLike): Vector3 {
 	const origin = new mapray.GeoPoint(
 		transform.longitude,
 		transform.latitude,
@@ -48,16 +45,8 @@ export function applyTransformToEntities(
 		return;
 	}
 
-	const position = new mapray.GeoPoint(
-		transform.longitude,
-		transform.latitude,
-		transform.height
-	);
-	const orientation = new mapray.Orientation(
-		transform.heading,
-		transform.tilt,
-		transform.roll
-	);
+	const position = new mapray.GeoPoint(transform.longitude, transform.latitude, transform.height);
+	const orientation = new mapray.Orientation(transform.heading, transform.tilt, transform.roll);
 
 	for (const entity of entities) {
 		entity.setPosition(position);
@@ -82,10 +71,7 @@ export function getModelToGocsMatrix(
 		transform.heading,
 		transform.tilt,
 		transform.roll
-	).getTransformMatrix(
-		[transform.scale, transform.scale, transform.scale],
-		geoMath.createMatrix()
-	);
+	).getTransformMatrix([transform.scale, transform.scale, transform.scale], geoMath.createMatrix());
 	const offsetToEntity = new mapray.Orientation(0, modelOffsetTilt, 0).getTransformMatrix(
 		[1, 1, 1],
 		geoMath.createMatrix()
@@ -104,11 +90,7 @@ export function toModelLocalPosition(
 	const geoMath = mapray.GeoMath;
 	const modelToGocs = getModelToGocsMatrix(mapray, transform, modelOffsetTilt);
 	const gocsToModel = geoMath.inverse_A(modelToGocs, geoMath.createMatrix());
-	const localPosition = geoMath.transformPosition_A(
-		gocsToModel,
-		position,
-		geoMath.createVector3()
-	);
+	const localPosition = geoMath.transformPosition_A(gocsToModel, position, geoMath.createVector3());
 
 	return [localPosition[0], localPosition[1], localPosition[2]];
 }

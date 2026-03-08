@@ -1,4 +1,3 @@
-import type { ScenePackage } from './gltf-builder';
 import type { IfcElementMetadata, ExtractedModelStats } from './ifc-loader';
 import type { IfcProcessingMetrics } from './ifc-worker-types';
 import { resolvePickedElement } from './ifc-pick';
@@ -16,7 +15,6 @@ import {
 	toModelLocalPosition
 } from './ifc-transform';
 import { createIfcWorkerClient, type IfcWorkerClient } from './ifc-worker-client';
-import { createMemoryResource } from './memory-resource';
 
 type MaprayModule = typeof import('@mapray/mapray-js').default;
 type MaprayViewerInstance = InstanceType<MaprayModule['Viewer']>;
